@@ -358,7 +358,9 @@ def lastData(Ds,term):
         TrainSet.append(Set)
     return TrainSet
 
-
+# =============================================================================
+# Train set 
+# =============================================================================
 train_txt_files = glob.glob('brat/*.txt')
 train_ann_files = glob.glob('brat/*.ann')
 train_set,termLenTrain = prepro(train_txt_files)
@@ -367,13 +369,14 @@ indexOfEntities,inde = IndexAnnotationsAset(train_set,trann)
 Dataset = tagging(indexOfEntities,train_set)
 BiosData=bios_tagging(Dataset)
 TrainSet=pos(BiosData)
-#TrainSet=lastData(DatSet,termLenTrain)
-
-
-test_txt_files = glob.glob('brat/*.txt')
+# =============================================================================
+# Test set
+# =============================================================================
+test_txt_files = glob.glob('brat-test/*.txt')
 test_set,termLenTest = prepro(test_txt_files)
-TestSet=pos(test_set)
-# Setting the wordid and tagid of each sentence
+BioDat=bios_tagging(test_set)
+TestSet=pos(BioDat)
+#TrainSet=lastData(DatSet,termLenTrain)
 
 
 def Sets(Daset):
@@ -502,7 +505,10 @@ f1_scorer = make_scorer(metrics.flat_f1_score,
  #                       scoring=f1_scorer)
 #rs.fit(X_train, y_train)
 # predictions on the X_test
-y_pred = rs.predict(X_train)
+y_pred = rs.predict(X_test)
+
+np.save('CRFtestLabels.npy', y_pred)    # .npy extension is added if not given
+np.save('CRFtestText.npy', test_set)
 #y_pred_test = rs.predict(X_test)
 metrics.flat_f1_score(y_train, y_pred,
                       average='weighted', labels=labels)
@@ -548,8 +554,8 @@ class BytesIntEncoder:
         return i.to_bytes(((i.bit_length() + 5) // 8), byteorder='little')
     
 class environment:
-    def __init__(self):
-        self.envidata=TrainSet
+    def __init__(self,dset):
+        self.envidata=dset
         self.stepenv=0
         self.reward=0
         self.done=False
@@ -566,7 +572,7 @@ class environment:
         done=self.done
         steps+=1
         self.stepenv=steps
-        #print(steps)
+        #print(self.envidata[eps][steps][0])
         new_stateenv=BytesIntEncoder.encode(self.envidata[eps][steps][0].encode())
         #state=new_state
         new_stateenv=str(new_stateenv)
@@ -578,12 +584,12 @@ class environment:
         #    reward=[1 if self.envidata['value'][steps] < 0 else 0]
         else:
             reward=[0 if self.envidata[eps][steps][2] == 'SINTOMA' else 1]
-        done=[True if len(self.envidata[ep])-1==steps else False]
+        done=[True if len(self.envidata[ep])-2==steps else False]
         #print(done)
         return new_stateenv,reward[0],done[0],action
 ep=0  
 game=0
-env = environment()
+env = environment(TrainSet)
 while game!=1:
     done=False
     state=env.reset(ep)
@@ -695,7 +701,7 @@ def plotLearning(scores, x=None, window=5):
     plt.plot(x, running_avg)
     plt.savefig('cumulativeppo.png')
     plt.show()
-agent=Agent(alpha=1e-2500,n_actions=2)
+agent=Agent(alpha=0.01,n_actions=2)
 n_games = 0
 best_score = 0#env.reward_range[0]
 score_history = []
@@ -704,13 +710,15 @@ load_checkpoint = False
 if load_checkpoint:
     agent.load_models()
 ep=0
+training_process=[]
 observation=env.reset(ep)
-while n_games!=100:
+while n_games!=5:
     observation=env.reset(ep)
     done=False
     score = 0
     print('this is the game {}'.format(n_games))
     #observation = observation
+    stepss=0
     ep+=1
     if ep==len(TrainSet):
         ep=0
@@ -718,6 +726,7 @@ while n_games!=100:
     while done!=True:
         action = agent.choose_action(observation)
         observation_,reward, done, info = env.step(action,ep)
+        stepss+=1
         observation_ = observation_
         score += reward
         if not load_checkpoint:
@@ -725,7 +734,8 @@ while n_games!=100:
         observation = observation_
     score_history.append(score)
     avg_score = np.mean(score_history[-10:])
-    print('This is the avg_score {} and episode {}'.format(avg_score,ep))
+    print('This is the score {} fullscore {} and avg_score {} and episode {}'.format(score,stepss,avg_score,ep))
+    training_process.append([score,stepss])
     if avg_score > best_score:
         best_score = avg_score 
         if not load_checkpoint:
@@ -745,8 +755,9 @@ avg_re=0
 rew_ep=[]
 ep=0
 gamess=0
+pltr=[]
 state=env.reset(ep)
-while gamess!=500:
+while gamess!=1:
     state=env.reset(ep)
     state = list(np.concatenate(state).flat)
     done=False
@@ -754,30 +765,428 @@ while gamess!=500:
     Reward.append([gamess,np.mean(rew_ep)])
     rew_ep=[]
     ep+=1
-    if ep==len(TrainSet):
+    if ep==len(TestSet):
         ep=0
         gamess+=1
     while done!=True:
         action=agent.choose_action(state)
+        if action==1:
+            print('This is the action {}'.format(action))
+            break
         state,reward,done,_=env.step(action,ep)
         steps+=1
-        print(gamess,action,reward)
-        rew_ep.append(reward)
+        rew_ep.append([reward,steps])
         avg_re=np.mean(rew_ep)
         #if done==True:
         #    print('winning')
             #steps=0
         state = list(np.concatenate(state).flat)
+    pltr.append(rew_ep)
+
+
+np.save('A2CtestLabels.npy', pltr)    # .npy extension is added if not given
 
 Reward=np.array(Reward)
 plt.figure(figsize=(13, 13))
 plt.ylabel('Score')
 plt.xlabel('Game')
-plt.plot(Reward[:,0], Reward[:,1])
+#plt.plot(Reward[:,0],color='red')
+plt.plot(Reward[:,1],color='blue')
 plt.savefig('rewardEpActorCritic7.png')
 plt.grid(True)
 plt.show()
 
 
+trn_proc=np.array(training_process)
+trn_proci=np.array(trn_proc[:,0])
+trn_proc_dif=abs(trn_proc[:,0]-trn_proc[:,1])
+trn_proci = np.reshape(trn_proci,(3750,1))
+trn_proc_dif = np.reshape(trn_proc_dif,(3750,1))
+trn_procl=np.hstack((trn_proci,trn_proc_dif))
+trn_proclchunk=trn_procl[3000:3750]
+# importing pygal
+import pygal
+import numpy
+from pygal.style import Style
+  
+# change graph color
+custom_style = Style(
+    colors=('#daa520','#ff00ff'))
+  
+# creating Bar chart object
+#pie_chart = pygal.Bar(style=custom_style) 
+  
+# creating line chart object
+line_chart = pygal.StackedLine(style=custom_style)
+  
+# naming the title
+line_chart.title = 'Stacked Line chart'
+  
+  
+# adding lines
+line_chart.add('A', trn_proclchunk[:,0])
+line_chart.add('B', trn_proclchunk[:,1])
+#line_chart.add('C', numpy.random.rand(5))
+#line_chart.add('D', numpy.random.rand(5))
+  
+line_chart
+line_chart.render_to_png('aa.png')
+
+trch=[]
+for i in trn_proc:
+    print(i)
+    prec=i[0]/i[1]
+    tot=abs(prec-1)
+    trch.append([prec,tot])
+trch=np.array(trch)
+trpr=trch[3000:3750]
+# importing packages
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib
+# load dataset
+y_labels=np.arange(701,750)
+df = pd.DataFrame(trpr, index=y_labels)
+# plot a Stacked Bar Chart using matplotlib
+df.plot(
+   # x = 'Name',
+    kind = 'barh',
+    stacked = True,
+    title = 'Correct Predictions',
+    mark_right = True,
+    grid=True,
+    color=['y','c'],
+    figsize=(18, 18))
+plt.xlabel('Predictions Actor Critic')
+plt.ylabel('document')
+#plt.yticks(labels=y_labels)
+plt.legend(["tp+tn", "fp+fn"]);
 
 
+import os 
+import time 
+import random
+import numpy as np
+import matplotlib.pyplot as plt
+import pybullet_envs
+import gym
+import torch 
+import torch.nn as nn
+import torch.nn.functional as F 
+from gym import wrappers 
+from torch.autograd import Variable 
+from collections import deque
+#import catch as Catch
+
+save_models=True
+if not os.path.exists("./results"):
+    os.makedirs("./results")
+if save_models and  not os.path.exists("./pytorch_models"):
+    os.makedirs("./pytorch_models")
+class ReplayBuffer(object):
+    def __init__(self, max_size=1e6):
+        self.storage=[]
+        self.max_size=max_size
+        self.ptr = 0
+        
+    def add(self, transition):
+        if len(self.storage) == self.max_size:
+            self.storage[int(self.ptr)]=transition
+            self.ptr = (self.ptr + 1) % self.max_size
+        else:
+            self.storage.append(transition)
+    def sample(self,batch_size):
+        ind=np.random.randint(0, len(self.storage),size=batch_size)
+        batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones = [], [], [], [], []
+        for i in ind:
+            state,next_state,action,reward,done=self.storage[i]
+            batch_states.append(np.array(state, copy=False))
+            batch_next_states.append(np.array(next_state, copy=False))
+            batch_actions.append(np.array(action, copy=False))
+            batch_rewards.append(np.array(reward, copy=False))
+            batch_dones.append(np.array(done, copy=False))
+        return np.array(batch_states),np.array(batch_next_states), np.array(batch_actions), np.array(batch_rewards).reshape(-1,1), np.array(batch_dones).reshape(-1,1)
+
+class Actor(nn.Module):
+    def __init__(self, state_dim, action_dim, max_action):
+        super(Actor, self).__init__()
+        #self.layer_1=nn.Linear(state_dim,400)
+        #self.layer_2=nn.Linear(400,300)
+        #self.layer_3=nn.Linear(300, action_dim)
+        #self.Softmax=nn.Softmax(dim=1)
+        self.layer_1=nn.Linear(state_dim,128)
+        ##self.layer_2=nn.Linear(400,300)
+        self.layer_3=nn.Linear(128, action_dim)
+        self.Softmax=nn.Softmax(dim=1)
+
+        self.max_action=max_action
+        
+    def forward(self, x):
+        x = F.relu(self.layer_1(x))
+        ##x = F.relu(self.layer_2(x))
+        #x = self.max_action * torch.tanh(self.layer_3(x))
+        x = torch.tanh(self.layer_3(x))
+        x = self.Softmax(x)
+        #print(x)
+        return x
+
+class Critic(nn.Module):
+    def __init__(self, state_dim, action_dim):
+        super(Critic, self).__init__()
+        # Defining the first Critic neural network
+        self.layer_1 = nn.Linear(state_dim + 1, 128)
+        #self.layer_2 = nn.Linear(400,300)
+        self.layer_3 = nn.Linear(128,1)
+        # Defining the second Critic neural network
+        self.layer_4 = nn.Linear(state_dim + 1, 128)
+        #self.layer_5 = nn.Linear(400,300)
+        self.layer_6 = nn.Linear(128,1)
+    
+    def forward(self, x, u):
+        xu = torch.cat([x, u], 1)
+        #print(xu)
+        x1 = F.relu(self.layer_1(xu))
+        #x1 = F.relu(self.layer_2(x1))
+        x1 = self.layer_3(x1)
+        
+        x2 = F.relu(self.layer_4(xu))
+        #x2 = F.relu(self.layer_5(x2))
+        x2 = self.layer_6(x2)
+        return x1, x2
+    def Ql(self, x, u):
+        xu = torch.cat([x, u], 1)
+        x1 = F.relu(self.layer_1(xu))
+        #x1 = F.relu(self.layer_2(x1))
+        x1 = self.layer_3(x1)
+        return x1
+
+# Selecting the device(CPU or GPU)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Building the whole Training Process into a class
+
+class TD3(object):
+    def __init__(self,state_dim,action_dim,max_action):
+        self.actor=Actor(state_dim,action_dim,max_action).to(device)
+        self.actor_target=Actor(state_dim,action_dim,max_action).to(device)
+        self.actor_target.load_state_dict(self.actor.state_dict())
+        self.actor_optimizer=torch.optim.Adam(self.actor.parameters())#params=self.parameters(),lr=7e-3))
+        self.critic = Critic(state_dim,action_dim).to(device)
+        self.critic_target = Critic(state_dim,action_dim).to(device)
+        self.critic_target.load_state_dict(self.critic.state_dict())
+        self.critic_optimizer=torch.optim.Adam(self.critic.parameters())#params=self.parameters(),lr=7e-3))
+        self.max_action=max_action
+    
+    def select_action(self,state):
+        state=torch.Tensor(state.reshape(1,-1)).to(device)
+        return self.actor(state).cpu().data.numpy().flatten()
+    
+    def train(self,replay_buffer,iterations,batch_size=100,discount=0.99, tau=0.1, policy_noise=0.2,noise_clip=0.5, policy_freq=1):
+        
+        for b in range(iterations):
+            #sample a batch of transition (s,s',a,r) from the memory
+            batch_states, batch_next_states, batch_actions, batch_rewards, batch_dones = replay_buffer.sample(batch_size)
+            state = torch.Tensor(batch_states).to(device)
+            next_state= torch.Tensor(batch_next_states).to(device)
+            action = torch.Tensor(np.array(batch_actions)).to(device)
+            reward = torch.Tensor(batch_rewards).to(device)
+            done=torch.Tensor(batch_dones).to(device)
+            next_action=self.actor_target(next_state)
+            noise = torch.Tensor(action).data.normal_(0,policy_noise).to(device)
+            noise = noise.clamp(-noise_clip, noise_clip)
+            next_action=next_action.detach().numpy()#
+            noise=noise.detach().numpy()
+            noise=np.reshape(noise,(-1,1))
+            next_action = next_action + noise#).clamp(-self.max_action, self.max_action)
+            next_action = np.argmax(next_action,axis=1)
+            next_action=np.reshape(next_action,(-1,1))
+            next_action=torch.Tensor(next_action).to(device)
+            #print('This is the next action {} this is the next state {}'.format(next_action,next_state))
+            #print('This is the next state {} , the next_action {}'.format(len(next_state),len(next_action)))
+            target_Q1,target_Q2=self.critic_target(next_state,next_action)
+            target_Q=torch.min(target_Q1,target_Q2)
+            target_Q=reward + ((1-done) * discount * target_Q).detach()
+            #action=np.argmax(action,axis=1)
+            action=np.reshape(action,(-1,1))
+            #print('This is state {} action {}'.format(state, action))
+            #print('This is the state {} , the action {}'.format(len(state),len(action)))
+            current_Q1,current_Q2 = self.critic(state,action)
+            critic_loss = F.mse_loss(current_Q1,target_Q) + F.mse_loss(current_Q2,target_Q)
+            self.critic_optimizer.zero_grad()
+            critic_loss.backward()
+            self.critic_optimizer.step()
+            if b % policy_freq == 0:
+                #print('This is the input to actor {}'.format(self.actor(state)))
+                selfact=self.actor(state).detach().numpy()#
+                selfact = np.argmax(selfact,axis=1)
+                selfact=np.reshape(selfact,(-1,1))
+                selfact=torch.Tensor(selfact).to(device)
+                actor_loss = - self.critic.Ql(state, selfact).mean()
+                self.actor_optimizer.zero_grad()
+                actor_loss.backward()
+                self.actor_optimizer.step()
+                
+                for param, target_param in zip(self.actor.parameters(), self.actor_target.parameters()):
+                    target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+                
+                for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
+                    target_param.data.copy_(tau * param.data + (1 - tau) * target_param.data)
+    def save(self, filename, directory):
+        torch.save(self.actor.state_dict(), '%s/%s_actor.pth' % (directory,filename))
+        torch.save(self.critic.state_dict(), '%s/%s_critic.pth' % (directory,filename))
+    def load(self, filename, directory):
+        self.actor.load_state_dict(torch.load('%s/%s_actor.pth' % (directory, filename)))
+        self.critic.load_state_dict(torch.load('%s/%s_actor.pth' % (directory, filename)))
+
+def evaluate_policy(policy,eval_episodes=len(TrainSet)):
+    avg_reward=0
+    #eval_episodes=500
+    #reward_ep=[]
+    step=0
+    for _ in range(eval_episodes):
+        obs=env.reset(_)
+        done=False
+        while done!= True:
+            action = policy.select_action(np.array(list(np.concatenate(obs).flat)))#obs))
+            #action=int(np.round(abs(action)))
+            #print('This is evaluate action {}'.format(action))
+            obs,reward,done, _ =env.step(np.argmax(action),_)
+            #print(obs,reward,done)
+            done=done
+            #print(done)
+            step+=1
+            avg_reward += reward
+    avg_reward /= step
+        #reward_ep.append(avg_reward)
+    print("Average Reward over the Evaluation Step: %f" % (avg_reward))
+    return avg_reward
+#Parameters Initialization
+env_name="Risk Management"
+seed = 0
+start_timesteps=2000
+eval_freq=5e3
+max_timesteps=1000000
+expl_noise=0.1
+batch_size=100
+discount=0.99
+tau=0.15
+policy_noise=0.5
+noise_clip=0.5
+policy_freq=2
+
+file_name="%s_%s_%s" % ('TD3', env_name, str(seed))
+print("Settings: %s" % (file_name))
+
+
+
+env = environment(TrainSet)
+#state=env.reset()
+#done=False
+#cumulativeReward=0
+#while done!=True:
+#    action=np.random.randint(0,3,1)
+#    new_state,reward,done=env.step(action)
+#    print(new_state,action,reward,done)
+#    cumulativeReward+=reward[0]
+#    done=done[0]
+#    print('This is the cumulative Reward {}'.format(cumulativeReward))
+#print('The risk management agent achieves {} percentage'.format(cumulativeReward/len(FinancialData)))
+s = env.reset(0)
+
+s = list(s)
+step_pause = 0.3 # the pause between each plot
+#env.render(step_pause) 
+# Test
+#n_test_steps = 100
+continuous_execution = False
+print_details = False
+#env = Catch(rows=rows, columns=columns, speed=speed, max_steps=max_steps,
+#                max_misses=max_misses, observation_type=observation_type, seed=seed)
+#env.seed(seed)
+torch.manual_seed(seed)
+state_dim =len(s) #env.observation_space.shape[0]
+action_dim=2#env.action_space.shape[0]
+max_action=float(1)#len(env.action_space.high[0])
+policy = TD3(state_dim,action_dim,max_action)
+replay_buffer=ReplayBuffer()
+
+evaluations=[evaluate_policy(policy)]
+
+total_timesteps=0
+timesteps_since_eval=0
+episode_num=0
+done=True
+t0=time.time()
+
+while total_timesteps < max_timesteps:
+    if done:
+        if total_timesteps !=0:
+            #print("Total Timesteps:{} Episode Num {} Reward {}".format(total_timesteps,episode_num,episode_reward))
+            policy.train(replay_buffer, episode_timesteps, batch_size, discount, tau, policy_noise, noise_clip, policy_freq)
+        
+        if timesteps_since_eval >=eval_freq:
+            timesteps_since_eval %= eval_freq
+            evaluations.append(evaluate_policy(policy))
+            policy.save(file_name, directory="./pytorch_models")
+            np.save("./results/%s" % (file_name), evaluations)
+            
+        obs=env.reset(episode_num)
+        done=False
+        episode_reward=0
+        episode_timesteps=0
+        episode_num+=1
+    if total_timesteps < start_timesteps:
+        action = np.random.randint(2)#env.action_space.sample()
+    else:
+        action = policy.select_action(np.array(obs))
+        #action=np.array(int(np.round(abs(action[0]))))
+        #print('This is the action: {}'.format(action))
+        if expl_noise !=0:
+            action = (action + np.random.normal(0, expl_noise, size=1)).clip(0, 1)#env.action_space.shape[0])).clip(env.action_space.low, env.action_space.high)
+            #action=np.array(int(np.round(abs(action[0]))))
+    #print(action)
+    new_obs,reward,done,_=env.step(np.argmax(action),episode_num)
+    print(obs,new_obs,reward,done,episode_num,episode_timesteps)
+    done_bool=1 if episode_timesteps + 2 == len(TrainSet[episode_num]) else float(done)#env._max_episode_steps else float(done)
+    episode_reward += reward
+    replay_buffer.add((list(np.concatenate(obs).flat),list(np.concatenate(new_obs).flat),np.argmax(action), reward, done_bool))
+    obs=new_obs
+    episode_timesteps +=1
+    total_timesteps+=1
+    timesteps_since_eval+=1
+    if episode_num==len(TrainSet) or len(TrainSet[episode_num])-2==episode_timesteps:
+        episode_num+=0
+        done=True
+evaluations.append(evaluate_policy(policy))
+if save_models:policy.save('%s' % (file_name),directory="./pytorch_models")
+np.save("./results/%s" % (file_name),evaluations)
+#policy = TD3(state_dim,action_dim,max_action)
+#policy.load(file_name,'./pytorch_models/')
+#np.load("./results/%s" % (file_name),evaluations)
+eval_episodes=250
+rewardAg=[]
+env=environment(TestSet)
+for _ in range(eval_episodes):
+    avg_reward=0
+    obs=env.reset(_)
+    done=False
+    step=0
+    ep_reward=[]
+    while done!= True:
+        action = policy.select_action(np.array(list(np.concatenate(obs).flat)))
+        print(np.argmax(action))
+        obs,reward,done, _ =env.step(np.argmax(action),_)
+        done=done
+        avg_reward += reward
+        step+=1
+        ep_reward.append(reward)
+    #arew=np.array(avg_reward)/20000
+    rewardAg.append(sum(ep_reward)/step)
+cx=np.arange(0,len(rewardAg))
+plt.figure(figsize=(13, 13))
+plt.ylabel('Score')
+plt.xlabel('Game')
+plt.plot(x,rewardAg)
+plt.savefig('rewardEpActorCritic7.png')
+plt.grid(True)
+plt.show()
